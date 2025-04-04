@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Ephemeral Chat</title>
+    <style>
+        :root {
+            --primary: #3498db;
+            --secondary: #2980b9;
+            --accent: #e74c3c;
+            --dark: #2c3e50;
+            --light: #ecf0f1;
+            --success: #2ecc71;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Arial', sans-serif;
+        }
+        
+        body {
+            background: var(--dark);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: var(--light);
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 500px;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .panel {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+        }
+        
+        h3 {
+            margin-bottom: 10px;
+            color: var(--primary);
+        }
+        
+        input, button {
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            margin: 5px 0;
+            width: 100%;
+        }
+        
+        input {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+        
+        button {
+            background: var(--primary);
+            color: white;
+            cursor: pointer;
+        }
+        
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        
+        .chat-area {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            overflow-y: auto;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 10px;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .sent {
+            background: var(--primary);
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+        }
+        
+        .status {
+            padding: 10px;
+            text-align: center;
+            color: var(--success);
+        }
+        
+        .error {
+            color: var(--accent);
+        }
+        
+        .message-info {
+            font-size: 0.8em;
+            opacity: 0.7;
+            margin-top: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .expiry-notice {
+            font-size: 0.7em;
+            font-style: italic;
+            margin-top: 3px;
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="panel">
+            <h3>Peer Connection</h3>
+            <input type="text" id="yourId" placeholder="Your Name" readonly>
+            <input type="text" id="friendId" placeholder="Friend's Connection ID">
+            <button id="connectBtn">Connect</button>
+            <div id="connectionStatus" class="status">Disconnected</div>
+        </div>
+        
+        <div class="chat-area" id="chatArea"></div>
+        
+        <div class="panel">
+            <input type="text" id="messageInput" placeholder="Type a message..." disabled>
+            <button id="sendBtn" disabled>Send</button>
+        </div>
+    </div>
+
+    <!-- Include PeerJS library -->
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    
+    <script>
+        // Configuration
+        const MESSAGE_LIFETIME = 5 * 60 * 1000; // 5 minutes
+        
+        // DOM elements
+        const yourIdInput = document.getElementById('yourId');
+        const friendIdInput = document.getElementById('friendId');
+        const connectBtn = document.getElementById('connectBtn');
+        const connectionStatusDiv = document.getElementById('connectionStatus');
+        const chatArea = document.getElementById('chatArea');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        
+        // PeerJS variables
+        let peer;
+        let conn;
+        let connectionId;
+        let messages = [];
+        
+        // Initialize the app
+        function init() {
+            // Generate random ID
+            connectionId = 'user-' + Math.random().toString(36).substring(2, 8);
+            yourIdInput.value = connectionId;
+            
+            // Create PeerJS instance
+            peer = new Peer(connectionId, {
+                host: '0.peerjs.com',
+                port: 443,
+                secure: true,
+                debug: 1
+            });
+            
+            // Set up peer connection handlers
+            peer.on('open', (id) => {
+                connectionStatusDiv.textContent = "Ready to connect (ID: " + id + ")";
+                connectBtn.disabled = false;
+            });
+            
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnection();
+            });
+            
+            peer.on('error', (err) => {
+                console.error("Peer error:", err);
+                connectionStatusDiv.textContent = "Error: " + err.type;
+                connectionStatusDiv.className = "status error";
+            });
+            
+            // Set up UI event listeners
+            connectBtn.addEventListener('click', connectToPeer);
+            sendBtn.addEventListener('click', sendMessage);
+            messageInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendMessage();
+            });
+            
+            // Clean up expired messages every minute
+            setInterval(cleanupMessages, 60000);
+        }
+        
+        // Connect to peer
+        function connectToPeer() {
+            const friendId = friendIdInput.value.trim();
+            if (!friendId) return;
+            
+            connectionStatusDiv.textContent = "Connecting...";
+            connectBtn.disabled = true;
+            
+            conn = peer.connect(friendId);
+            setupConnection();
+        }
+        
+        // Set up the data connection
+        function setupConnection() {
+            conn.on('open', () => {
+                connectionStatusDiv.textContent = "Connected to peer";
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                addSystemMessage("Chat connection established");
+            });
+            
+            conn.on('data', (data) => {
+                const message = JSON.parse(data);
+                message.timestamp = Date.now();
+                message.expiresAt = message.timestamp + MESSAGE_LIFETIME;
+                messages.push(message);
+                renderMessage(message, 'received');
+            });
+            
+            conn.on('close', () => {
+                connectionStatusDiv.textContent = "Disconnected";
+                connectionStatusDiv.className = "status error";
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+                connectBtn.disabled = false;
+                addSystemMessage("Chat connection closed");
+            });
+            
+            conn.on('error', (err) => {
+                console.error("Connection error:", err);
+                connectionStatusDiv.textContent = "Connection error";
+                connectionStatusDiv.className = "status error";
+            });
+        }
+        
+        // Send message
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text || !conn || !conn.open) return;
+            
+            const message = {
+                sender: connectionId,
+                text: text,
+                timestamp: Date.now(),
+                expiresAt: Date.now() + MESSAGE_LIFETIME
+            };
+            
+            conn.send(JSON.stringify(message));
+            messages.push(message);
+            renderMessage(message, 'sent');
+            messageInput.value = '';
+        }
+        
+        // Render message
+        function renderMessage(message, type) {
+            const now = Date.now();
+            const timeLeft = Math.max(0, message.expiresAt - now);
+            const minutesLeft = Math.ceil(timeLeft / (60 * 1000));
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const timeString = new Date(message.timestamp).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            
+            messageDiv.innerHTML = `
+                <div>${message.text}</div>
+                <div class="message-info">
+                    <span>${type === 'sent' ? 'You' : 'Friend'}</span>
+                    <span>${timeString}</span>
+                </div>
+                <div class="expiry-notice">Expires in ${minutesLeft} min</div>
+            `;
+            
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+        
+        // Add system message
+        function addSystemMessage(text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.style.textAlign = 'center';
+            messageDiv.style.color = 'rgba(255,255,255,0.5)';
+            messageDiv.style.fontSize = '0.9em';
+            messageDiv.style.margin = '10px 0';
+            messageDiv.textContent = text;
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+        
+        // Clean up expired messages
+        function cleanupMessages() {
+            const now = Date.now();
+            messages = messages.filter(msg => msg.expiresAt > now);
+            
+            // Update expiry notices
+            document.querySelectorAll('.message').forEach(el => {
+                const expiryNotice = el.querySelector('.expiry-notice');
+                if (expiryNotice) {
+                    const minutesLeft = Math.ceil((parseInt(expiryNotice.dataset.expiresAt) - now) / 60000);
+                    expiryNotice.textContent = `Expires in ${Math.max(0, minutesLeft)} min`;
+                }
+            });
+        }
+        
+        // Initialize the app
+        init();
+    </script>
+</body>
+</html>
